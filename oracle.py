@@ -1,9 +1,14 @@
 from collections import defaultdict
 import random
+from pprint import pprint
 
 ENTITY_TEMPLATE_STORE = dict()
 TAG_STORE = dict()
 ACTION_STORE = dict()
+
+
+def ExStink():
+    raise Exception("HOO HOO")
 
 
 class EntityTemplate:
@@ -23,12 +28,24 @@ class EntityTemplate:
 
     def create(self):
         entity = Entity()
-        entity_tags = self.essential.union(
-            set([e for e in self.optional if random.choice((True, False))])
-        )
-        for tag in entity_tags:
-            if entity.add_tag(tag) == False:
-                return None
+        generated_tags = {t for tag in self.essential for t in TAG_STORE[tag].generate(set())}
+
+        for tag in generated_tags:
+            if not tag.validate(generated_tags):
+                print(f'Also sprach Zarathustra, "{tag}, {generated_tags}"')
+                raise Exception("Gott ist tot.")
+
+
+        optional_sets = [TAG_STORE[opt].generate(generated_tags) for opt in random.sample(
+            list(self.optional), random.randint(0, len(self.optional))
+        )]
+        for tag_set in optional_sets:
+            if not all([tag.validate(generated_tags) for tag in tag_set]):
+                continue
+            else:
+                generated_tags.update(tag_set)
+        
+        entity.tags = generated_tags
         return entity
 
     ...
@@ -40,25 +57,11 @@ class EntityTemplate:
 class Entity:
     def __init__(self):
         self.tags = set()
-
-    def add_tag(self, tag_name, exclude_traits=set()):
-        tag = TAG_STORE.get(tag_name)
-        if tag is None:
-            print("UH OH STINKy:", tag_name)
-            raise Exception("ＦＵＵＣＫ")
-        for trait in tag.traits:
-            if type(trait) in exclude_traits:
-                continue
-            if trait.init(self) == False:
-                return False
-        self.tags.add(tag_name)
-        return True
+        self.banned_tags = set()
 
 
 class Tag:
     NEXT_TAG_ID = 0
-
-    ...
 
     def __init__(self, name=None, traits=None):
         self.id = self.NEXT_TAG_ID
@@ -66,81 +69,71 @@ class Tag:
         self.name = name if name is not None else f"Tag{self.id}"
         self.traits = traits if traits is not None else set()
         TAG_STORE[self.name] = self
+    
+    def generate(self, other_tags):
+        if self in other_tags:
+            return set()
+        return {t for trait in self.traits for t in trait.generate(other_tags)}.union({self})
 
-    ...
+    def validate(self, other_tags, recip=True):
+        if recip is True:
+            return all([trait.validate(other_tags) for trait in self.traits]) and all([tag.validate({self}, recip=False) for tag in other_tags])
+        else:
+            return all([trait.validate(other_tags) for trait in self.traits])
 
-
-...
+    def __repr__(self):
+        return self.name
 
 
 class TagTrait:
-    pass
+    def __init__(self):
+        pass
+    
+    def generate(self, other_tags):
+        return set()
 
-
-...
+    def validate(self, other_tags):
+        return True
 
 
 class Implies(TagTrait):
-    def __init__(self, *args):
-        self.implies = args
+    def __init__(self, *target_tags):
+        self.target_tags = target_tags
 
-    ...
-
-    def init(self, entity):
-        for tag in self.implies:
-            entity.add_tag(tag)
-
-    ...
-
-
-...
+    def generate(self, other_tags):
+        return {t for tag in self.target_tags for t in TAG_STORE[tag].generate(other_tags)}
 
 
 class ImpliesNot(TagTrait):
-    def __init__(self, *args):
-        self.implies_not = args
-
-    ...
-
-    def init(self, entity):
-        for tag in self.implies_not:
-            if tag in entity.tags:
-                raise Exception("ＦＵＣＫ")
-
-    ...
-
-
-...
-
-
-class OneOf(TagTrait):
-    def __init__(self, *one_of):
-        self.one_of = one_of
-
-    ...
-
-    def init(self, entity):
-        entity.add_tag(random.choice(self.one_of), exclude_traits={IsFrom})
-
-    ...
-
-
-...
+    def __init__(self, *target_tags):
+        self.target_tags = target_tags
+    
+    def validate(self, other_tags):
+        for tag in self.target_tags:
+            if TAG_STORE[tag] in other_tags:
+                return False
+        return True
 
 
 class IsFrom(TagTrait):
-    def __init__(self, is_from):
-        self.is_from = is_from
+    def __init__(self, target_tag):
+        self.target_tag = target_tag
 
-    ...
-
-    def init(self, entity):
-        entity.add_tag(self.is_from, exclude_traits={OneOf})
-
-    ...
+    def generate(self, other_tags):
+        if TAG_STORE[self.target_tag] in other_tags:
+            return set()
+        return {TAG_STORE[self.target_tag]}
 
 
-...
+class OneOf(TagTrait):
+    def __init__(self, *target_tags):
+        self.target_tags = target_tags
+
+    def generate(self, other_tags):
+        generated_tag = TAG_STORE[random.choice(self.target_tags)]
+        if generated_tag in other_tags:
+            return set()
+        return {generated_tag}
 
 
 class Action:
@@ -158,21 +151,11 @@ class Action:
 
 ...
 
-# ENTITIES
-
-feral_child = EntityTemplate(
-    name="Feral Child",
-    essential={"Intelligibility"},
-    optional={
-        "Ferocious",
-        "Sacred",
-        "Fast",
-    },
-)
-
 # TAGS
 
 alive = Tag(name="Alive", traits=[ImpliesNot("Object")])
+
+object = Tag(name="Object", traits=[ImpliesNot("Alive")])
 
 fast = Tag(name="Fast", traits=[Implies("Alive")])
 
@@ -181,9 +164,9 @@ intelligibility = Tag(
     traits=[Implies("Alive"), OneOf("Intelligible", "Unintelligible")],
 )
 
-intelligible = Tag(name="Intelligible", traits=[IsFrom("Intelligible")])
+intelligible = Tag(name="Intelligible", traits=[IsFrom("Intelligibility")])
 
-unintelligible = Tag(name="Unintelligible", traits=[IsFrom("Intelligible")])
+unintelligible = Tag(name="Unintelligible", traits=[IsFrom("Intelligibility")])
 
 dangerous = Tag(
     name="Dangerous",
@@ -200,11 +183,38 @@ apollo = Tag(name="Apollo", traits=[IsFrom("Sacred")])
 
 beseechable = Tag(name="Beseechable", traits=[Implies("Alive")])
 
-feral_child_instance = feral_child.create()
+wise = Tag(name="Wise", traits=[Implies("Intelligibility")])
 
-from pprint import pprint
+pprint(TAG_STORE)
 
-pprint(feral_child_instance.tags)
+# ENTITIES
+
+feral_child = EntityTemplate(
+    name="Feral Child",
+    essential={"Intelligibility"},
+    optional={
+        "Ferocious",
+        "Sacred",
+        "Fast",
+    },
+)
+
+blind_man = EntityTemplate(
+    name="Blind Man",
+    essential={"Intelligibility"},
+    optional={
+        "Sacred",
+        "Insidious",
+        "Helpless",
+        "Wise",
+    }
+)
+
+#feral_child_instance = feral_child.create()
+blind_man_instance = blind_man.create()
+
+pprint(blind_man_instance.tags)
+#pprint(feral_child_instance.tags)
 
 # construct actions
 
